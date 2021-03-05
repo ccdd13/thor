@@ -1,0 +1,78 @@
+name: C/C++ build ci
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - uses: actions/checkout@v2
+
+    - name: timestamp
+      id: timestamp
+      run: |
+        timestamp="$(date '+%s')"
+        echo "::set-output name=timestamp::${timestamp}"
+        echo "::set-output name=tagname::ci-${timestamp}"
+        # ${{ steps.timestamp.outputs.timestamp }}
+        # ${{ steps.timestamp.outputs.tagname }}
+
+    - name: Tag commit
+      uses: tvdias/github-tagger@v0.0.2
+      with:
+        repo-token: "${{ secrets.GITHUB_TOKEN }}"
+        tag: ${{ steps.timestamp.outputs.tagname }}
+        commit-sha: ${{ github.sha }}
+
+    - name: changelog
+      id: changelog
+      run: |
+        git fetch --prune --unshallow --tags
+        git --no-pager log \
+                            --all --decorate --oneline --graph \
+                            --date=format:'%d/%m/%Y %H:%M:%S %z' --format='%h - %cd - %s' \
+              | head -n 10 > CHANGELOG.txt
+        echo -en "...\n" >> CHANGELOG.txt
+        echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+        echo "$(cat CHANGELOG.txt)" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+    - name: make
+      run: make -j8
+
+    - name: release asset
+      id: snapshot
+      env:
+        REPO_NAME: ${{ github.event.repository.name }}
+      run: |
+        snapshot="${REPO_NAME}-build-$(git rev-parse --short HEAD)-linux-amd64.zip"
+        zip -r "${snapshot}" build
+        snapshot=$(echo -n "$(pwd)/${snapshot}")
+        echo "::set-output name=snapshot::${snapshot}"
+        # ${{ steps.snapshot.outputs.snapshot }}
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      with:
+          name: CI Release at ${{ github.ref }}
+          tag_name: ${{ steps.timestamp.outputs.tagname }}
+          files: |
+            ${{ steps.snapshot.outputs.snapshot }}
+          body: |
+            # change log :
+            
+            ```
+            ${{ env.CHANGELOG }}
+            ```
+            
+            **for full changelog, see [git commit history](https://github.com/${{ env.GITHUB_REPOSITORY }}/commits/main)**
+            
+          prerelease: false
